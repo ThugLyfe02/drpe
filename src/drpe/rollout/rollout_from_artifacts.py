@@ -31,7 +31,14 @@ class ArtifactRolloutReport:
     decision: GuardrailDecision
 
 
-def _summarize(cfg: SimConfig, *, users: np.ndarray, items: np.ndarray, embedding_version: str, model_version: str) -> tuple[VariantStats, np.ndarray, np.ndarray]:
+def _summarize(
+    cfg: SimConfig,
+    *,
+    users: np.ndarray,
+    items: np.ndarray,
+    embedding_version: str,
+    model_version: str,
+) -> tuple[VariantStats, np.ndarray, np.ndarray]:
     rng = np.random.default_rng(cfg.seed)
     items_quality = rng.uniform(0.3, 1.0, cfg.num_items).astype(np.float32)
     items_pop = rng.beta(2, 8, cfg.num_items).astype(np.float32)
@@ -60,6 +67,26 @@ def _summarize(cfg: SimConfig, *, users: np.ndarray, items: np.ndarray, embeddin
     )
 
 
+def _align_cfg_to_embeddings(cfg: SimConfig, users: np.ndarray, items: np.ndarray) -> SimConfig:
+    """Ensure cfg dimensions match the embedding artifacts.
+
+    This prevents common mistakes where training uses dim!=sim.embedding_dim.
+    """
+    if users.ndim != 2 or items.ndim != 2:
+        raise ValueError("embeddings must be 2D matrices")
+    if users.shape[1] != items.shape[1]:
+        raise ValueError(f"user/item embedding dims differ: {users.shape[1]} vs {items.shape[1]}")
+
+    return SimConfig(
+        **{
+            **cfg.__dict__,
+            "num_users": int(users.shape[0]),
+            "num_items": int(items.shape[0]),
+            "embedding_dim": int(users.shape[1]),
+        }
+    )
+
+
 def compare_embedding_artifacts(
     *,
     baseline_path: str,
@@ -70,20 +97,35 @@ def compare_embedding_artifacts(
     base_users, base_items = load_embeddings(baseline_path)
     cand_users, cand_items = load_embeddings(candidate_path)
 
-    base_stats, base_ed, base_rp = _summarize(cfg, users=base_users, items=base_items, embedding_version="emb_v1", model_version="rank_v1")
-    cand_stats, cand_ed, cand_rp = _summarize(cfg, users=cand_users, items=cand_items, embedding_version="emb_v2", model_version="rank_v2")
+    # Align config to embedding shapes so simulation uses correct dimensionality.
+    cfg_base = _align_cfg_to_embeddings(cfg, base_users, base_items)
+    cfg_cand = _align_cfg_to_embeddings(cfg, cand_users, cand_items)
+
+    base_stats, base_ed, base_rp = _summarize(
+        cfg_base,
+        users=base_users,
+        items=base_items,
+        embedding_version="emb_v1",
+        model_version="rank_v1",
+    )
+    cand_stats, cand_ed, cand_rp = _summarize(
+        cfg_cand,
+        users=cand_users,
+        items=cand_items,
+        embedding_version="emb_v2",
+        model_version="rank_v2",
+    )
 
     depth_kl = histogram_kl(base_ed, cand_ed, bins=40)
     ret_kl = histogram_kl(base_rp, cand_rp, bins=40)
 
     # geometry drift uses aligned embeddings
-    # cohorts are unknown here, so omit cohort breakdown (use overall mean drift)
     geom = build_geometry_drift_report(
         users_v1=base_users,
         users_v2=cand_users,
         items_v1=base_items,
         items_v2=cand_items,
-        user_cohorts={i: "all" for i in range(cfg.num_users)},
+        user_cohorts={i: "all" for i in range(cfg_base.num_users)},
     )
 
     decision = decide_rollout(
