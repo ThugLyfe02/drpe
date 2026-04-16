@@ -5,7 +5,7 @@ from typing import Dict
 
 import numpy as np
 
-from drpe.drift.drift import EmbeddingDriftResult, embedding_drift
+from drpe.drift.drift import EmbeddingDriftResult, cosine_shift, embedding_drift
 
 
 @dataclass
@@ -16,15 +16,16 @@ class GeometryDriftReport:
 
 
 def cohort_user_drift(users_v1: np.ndarray, users_v2: np.ndarray, user_cohorts: Dict[int, str]) -> Dict[str, float]:
-    """Compute mean cosine shift per cohort for users."""
-    # aligned matrices => drift per row
-    dist = 1.0 - (users_v1 / (np.linalg.norm(users_v1, axis=1, keepdims=True) + 1e-8)) * (
-        users_v2 / (np.linalg.norm(users_v2, axis=1, keepdims=True) + 1e-8)
-    )
-    per_row = np.sum(dist, axis=1)
+    """Compute mean cosine *distance* per cohort for users.
+
+    Returns values in [0, 2] (typically small, e.g., 0.0x–0.1x for incremental updates).
+    """
+    per_row = cosine_shift(users_v1, users_v2)  # shape (N,)
 
     buckets: Dict[str, list[float]] = {}
     for uid, c in user_cohorts.items():
+        if uid < 0 or uid >= per_row.shape[0]:
+            continue
         buckets.setdefault(c, []).append(float(per_row[uid]))
 
     return {c: float(np.mean(v)) for c, v in buckets.items() if len(v) > 0}
