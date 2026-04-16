@@ -14,8 +14,10 @@ class GuardrailDecision:
 class GuardrailConfig:
     # Maximum allowed relative drop in retention proxy (e.g. 0.01 = 1% drop)
     max_retention_drop: float = 0.01
-    # Optional: max allowed increase in cohort variance before we pause
-    max_cohort_variance: Optional[float] = None
+
+    # Optional: maximum allowed mean cosine shift for user/item embeddings between versions.
+    # This treats embedding updates like schema migrations: measurable drift gates rollout.
+    max_embedding_mean_cosine_shift: Optional[float] = None
 
 
 def decide_rollout(
@@ -24,11 +26,18 @@ def decide_rollout(
     candidate_retention: float,
     cohort_retention_baseline: Dict[str, float] | None = None,
     cohort_retention_candidate: Dict[str, float] | None = None,
+    embedding_mean_cosine_shift_users: Optional[float] = None,
+    embedding_mean_cosine_shift_items: Optional[float] = None,
     cfg: GuardrailConfig = GuardrailConfig(),
 ) -> GuardrailDecision:
-    """Block rollout if durability guardrail is breached.
+    """Block rollout if durability guardrails are breached.
 
-    This intentionally prioritizes durability over short-term lift.
+    Durability is prioritized over short-term lift.
+
+    Guardrails:
+    - retention proxy relative drop
+    - worst-cohort retention proxy relative drop (optional)
+    - embedding geometry drift (optional): mean cosine shift for users/items
     """
     if baseline_retention <= 0:
         return GuardrailDecision(False, "invalid baseline retention")
@@ -41,7 +50,6 @@ def decide_rollout(
             f"blocked: retention proxy drop {rel_drop:.3%} exceeds {cfg.max_retention_drop:.3%}",
         )
 
-    # Optional cohort-level guardrail (simple worst-cohort drop check)
     if cohort_retention_baseline and cohort_retention_candidate:
         worst = 0.0
         worst_cohort = None
@@ -57,6 +65,19 @@ def decide_rollout(
             return GuardrailDecision(
                 False,
                 f"blocked: cohort {worst_cohort} retention drop {worst:.3%} exceeds {cfg.max_retention_drop:.3%}",
+            )
+
+    if cfg.max_embedding_mean_cosine_shift is not None:
+        # Only gate if drift numbers are provided
+        if embedding_mean_cosine_shift_users is not None and embedding_mean_cosine_shift_users > cfg.max_embedding_mean_cosine_shift:
+            return GuardrailDecision(
+                False,
+                f"blocked: user embedding drift mean {embedding_mean_cosine_shift_users:.4f} exceeds {cfg.max_embedding_mean_cosine_shift:.4f}",
+            )
+        if embedding_mean_cosine_shift_items is not None and embedding_mean_cosine_shift_items > cfg.max_embedding_mean_cosine_shift:
+            return GuardrailDecision(
+                False,
+                f"blocked: item embedding drift mean {embedding_mean_cosine_shift_items:.4f} exceeds {cfg.max_embedding_mean_cosine_shift:.4f}",
             )
 
     return GuardrailDecision(True, "allowed: guardrails satisfied")
