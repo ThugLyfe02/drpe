@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from drpe.data.simulator import SimConfig, run_simulation
-from drpe.embeddings.io import save_embeddings
+from drpe.embeddings.io import load_embeddings, save_embeddings
 from drpe.models.two_tower import TwoTower
 from drpe.training.dataset import ImplicitConfig, ImplicitFeedbackDataset
 
@@ -29,6 +29,9 @@ class TrainConfig:
     epochs: int = 2
     negatives_per_positive: int = 4
     seed: int = 7
+
+    # warm-start (optional)
+    warm_start_path: str | None = None
 
     # output
     out_path: str = "artifacts/embeddings_v1.npz"
@@ -52,6 +55,12 @@ def train(cfg: TrainConfig) -> str:
     dl = DataLoader(ds, batch_size=cfg.batch_size, shuffle=True)
 
     model = TwoTower(cfg.sim.num_users, cfg.sim.num_items, dim=cfg.dim)
+
+    # Warm-start embeddings to preserve geometry continuity (production-relevant).
+    if cfg.warm_start_path:
+        users_np, items_np = load_embeddings(cfg.warm_start_path)
+        model.warm_start_from_np(users_np, items_np)
+
     opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
     loss_fn = torch.nn.BCEWithLogitsLoss()
 
@@ -93,6 +102,9 @@ def _parse_args() -> TrainConfig:
     p.add_argument("--batch", dest="batch_size", type=int, default=2048)
     p.add_argument("--neg", dest="negatives_per_positive", type=int, default=4)
 
+    # warm start
+    p.add_argument("--warm-start", dest="warm_start_path", default=None)
+
     # simulator sizing (for quick local runs)
     p.add_argument("--users", type=int, default=300)
     p.add_argument("--items", type=int, default=1500)
@@ -119,6 +131,7 @@ def _parse_args() -> TrainConfig:
         epochs=a.epochs,
         negatives_per_positive=a.negatives_per_positive,
         seed=a.seed,
+        warm_start_path=a.warm_start_path,
         out_path=a.out_path,
     )
 
