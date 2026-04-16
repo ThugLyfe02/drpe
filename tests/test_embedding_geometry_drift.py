@@ -1,5 +1,3 @@
-import numpy as np
-
 from drpe.drift.embedding_geometry import build_geometry_drift_report
 from drpe.embeddings.versioning import generate_embedding_versions
 
@@ -18,3 +16,8 @@ def test_geometry_drift_report_shapes():
     assert rep.users.mean_cosine_shift >= 0.0
     assert rep.items.mean_cosine_shift >= 0.0
     assert len(rep.cohort_user_mean_shift) > 0
+
+    # Cohort drift should be on a similar scale to the overall mean drift.
+    for v in rep.cohort_user_mean_shift.values():
+        assert v >= 0.0
+        assert v < 1.0
