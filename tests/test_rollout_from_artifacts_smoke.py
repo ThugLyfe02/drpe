@@ -7,7 +7,7 @@ from drpe.training.train_two_tower import TrainConfig, train
 
 
 def test_rollout_from_artifacts_smoke(tmp_path):
-    # Train two small embedding sets with slightly different seeds
+    # Train v1, then warm-start v2 to preserve embedding geometry.
     base_path = tmp_path / "emb_v1.npz"
     cand_path = tmp_path / "emb_v2.npz"
 
@@ -19,16 +19,17 @@ def test_rollout_from_artifacts_smoke(tmp_path):
         seed=1,
         out_path=str(base_path),
     )
+    train(base_cfg)
+
     cand_cfg = TrainConfig(
-        sim=SimConfig(num_users=60, num_items=250, sessions_per_user=1, k=10, embedding_dim=16, seed=2),
+        sim=SimConfig(num_users=60, num_items=250, sessions_per_user=1, k=10, embedding_dim=16, seed=1),
         dim=16,
         epochs=1,
         batch_size=512,
         seed=2,
+        warm_start_path=str(base_path),
         out_path=str(cand_path),
     )
-
-    train(base_cfg)
     train(cand_cfg)
 
     assert os.path.exists(base_path)
