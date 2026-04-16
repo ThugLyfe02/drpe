@@ -18,5 +18,10 @@ The simulator generates:
 ## Pipeline (target)
 User events → features → embeddings → retrieval (top‑K) → ranking (multi‑objective) → evaluation → drift monitor → rollout guardrails.
 
+## Rollout control (new)
+We treat candidate model updates as **staged rollouts**. A candidate is blocked if the retention proxy drops beyond the configured threshold (optionally cohort‑aware), even if engagement improves.
+
+See `src/drpe/rollout/rollout_simulation.py` for a baseline vs candidate comparison that produces an explicit rollout decision.
+
 ## Why systems‑first
 A recommendation model can show offline lift while silently degrading online due to drift, proxy misalignment, and cohort instability. DRPE is designed to detect and prevent those failure modes.
