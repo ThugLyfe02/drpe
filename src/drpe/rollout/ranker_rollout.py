@@ -74,18 +74,21 @@ def compare_rankers_for_rollout(
     guardrails: GuardrailConfig = GuardrailConfig(),
     gamma_retention: float = 0.25,
     retention_fatigue_penalty: float = 0.0,
+    candidate_retention_bias: float = 0.0,
 ) -> RankerRolloutReport:
     """Compare baseline vs candidate ranker on the same embeddings.
 
     This isolates ranking-layer changes while holding retrieval embeddings constant.
 
-    retention_fatigue_penalty lets us model a realistic failure mode:
-    aggressive engagement optimization can increase fatigue and reduce durability.
+    retention_fatigue_penalty models a realistic failure mode: aggressive engagement
+    optimization increases fatigue and reduces durability.
+
+    candidate_retention_bias is a deterministic durability hit applied only to the
+    candidate path to guarantee a guardrail-breaching example for demos.
     """
 
     users, items = load_embeddings(embeddings_path)
 
-    # align cfg dimensions
     cfg = SimConfig(
         **{
             **cfg.__dict__,
@@ -106,7 +109,7 @@ def compare_rankers_for_rollout(
     rng2 = np.random.default_rng(cfg.seed)
     users_state, _ = generate_world(cfg)
 
-    def run_with_ranker(ranker: MultiObjectiveRanker, model_version: str) -> VariantStats:
+    def run_with_ranker(ranker: MultiObjectiveRanker, model_version: str, *, apply_bias: bool) -> VariantStats:
         local_users = [UserState(**u.__dict__) for u in users_state]
         all_summaries: list[SessionSummary] = []
 
@@ -150,6 +153,7 @@ def compare_rankers_for_rollout(
                     + cfg.retention_gain_per_depth * depth
                     - cfg.retention_decay_per_day * days_since
                     - retention_fatigue_penalty * u.fatigue
+                    - (candidate_retention_bias if apply_bias else 0.0)
                 )
                 retention = float(np.clip(retention, 0.0, 1.0))
 
@@ -177,8 +181,8 @@ def compare_rankers_for_rollout(
             cohort_retention=cohort_retention_means(all_summaries),
         )
 
-    base = run_with_ranker(baseline_ranker, "ranker_v1")
-    cand = run_with_ranker(candidate_ranker, "ranker_v2")
+    base = run_with_ranker(baseline_ranker, "ranker_v1", apply_bias=False)
+    cand = run_with_ranker(candidate_ranker, "ranker_v2", apply_bias=True)
 
     decision = decide_rollout(
         baseline_retention=base.retention_proxy,
