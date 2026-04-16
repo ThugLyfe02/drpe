@@ -115,6 +115,37 @@ def recommend_top_k(user: UserState, items: List[ItemState], k: int) -> List[Tup
     return top
 
 
+def recommend_top_k_from_matrices(
+    *,
+    user_id: int,
+    true_pref: np.ndarray,
+    user_embed: np.ndarray,
+    items_vec: np.ndarray,
+    items_quality: np.ndarray,
+    items_popularity: np.ndarray,
+    k: int,
+) -> List[Tuple[int, float, float]]:
+    """Vectorized recommender using explicit embedding matrices.
+
+    This is the key v1→v2 integration: rollout comparisons can now use different
+    embedding versions for scoring, while keeping ground truth affinity separate.
+    """
+    # score uses current embedding geometry
+    scores = items_vec @ user_embed + 0.05 * items_popularity
+    # affinity uses true preference (ground truth proxy)
+    affinity = (items_vec @ true_pref) * items_quality
+
+    # top-k indices
+    idx = np.argpartition(-scores, k - 1)[:k]
+    # sort those indices by score
+    idx = idx[np.argsort(-scores[idx])]
+
+    out: List[Tuple[int, float, float]] = []
+    for rank_i in idx:
+        out.append((int(rank_i), float(scores[rank_i]), float(affinity[rank_i])))
+    return out
+
+
 def simulate_session(
     *,
     user: UserState,
@@ -292,5 +323,182 @@ def run_simulation(
             )
             all_events.extend(ev)
             all_summaries.append(sm)
+
+    return all_events, all_summaries
+
+
+def run_simulation_with_embeddings(
+    cfg: SimConfig,
+    *,
+    users_embed: np.ndarray,
+    items_vec: np.ndarray,
+    items_quality: np.ndarray,
+    items_popularity: np.ndarray,
+    embedding_version: str,
+    model_version: str,
+) -> Tuple[List[Event], List[SessionSummary]]:
+    """Run simulator using explicit embedding matrices (v1/v2).
+
+    This makes embedding geometry drift *real*: rollout comparisons can use different
+    embedding versions for scoring without changing the rest of the simulator.
+    """
+    if users_embed.shape != (cfg.num_users, cfg.embedding_dim):
+        raise ValueError(f"users_embed must be {(cfg.num_users, cfg.embedding_dim)}, got {users_embed.shape}")
+    if items_vec.shape != (cfg.num_items, cfg.embedding_dim):
+        raise ValueError(f"items_vec must be {(cfg.num_items, cfg.embedding_dim)}, got {items_vec.shape}")
+
+    rng = np.random.default_rng(cfg.seed)
+
+    # Create world, but overwrite embed/vec with provided matrices
+    users, items = generate_world(cfg)
+
+    for u in users:
+        u.embed = users_embed[u.user_id].astype(np.float32)
+
+    for it in items:
+        it.vec = items_vec[it.item_id].astype(np.float32)
+        it.quality = float(items_quality[it.item_id])
+        it.popularity = float(items_popularity[it.item_id])
+
+    all_events: List[Event] = []
+    all_summaries: List[SessionSummary] = []
+
+    for u in users:
+        for s in range(cfg.sessions_per_user):
+            now = u.last_active + timedelta(hours=int(rng.integers(6, 72)))
+            session_id = f"u{u.user_id}-s{s}-{int(now.timestamp())}"
+
+            # Vectorized recs from matrices
+            recs = recommend_top_k_from_matrices(
+                user_id=u.user_id,
+                true_pref=u.true_pref,
+                user_embed=u.embed,
+                items_vec=items_vec,
+                items_quality=items_quality,
+                items_popularity=items_popularity,
+                k=cfg.k,
+            )
+
+            events: List[Event] = []
+            depth = 0.0
+
+            for rank, (item_id, score, affinity) in enumerate(recs, start=1):
+                events.append(
+                    Event(
+                        ts=now,
+                        user_id=u.user_id,
+                        item_id=item_id,
+                        event_type="impression",
+                        rank=rank,
+                        score=score,
+                        affinity=affinity,
+                        session_id=session_id,
+                        cohort=u.cohort,
+                        embedding_version=embedding_version,
+                        model_version=model_version,
+                    )
+                )
+
+                click_p = _sigmoid(2.2 * affinity - 1.0 * u.fatigue)
+                play_p = _sigmoid(2.0 * affinity - 0.8 * u.fatigue)
+                complete_p = _sigmoid(1.6 * affinity - 0.6 * u.fatigue)
+
+                if rng.random() < click_p:
+                    events.append(
+                        Event(
+                            ts=now + timedelta(seconds=rank * 2),
+                            user_id=u.user_id,
+                            item_id=item_id,
+                            event_type="click",
+                            rank=rank,
+                            score=score,
+                            affinity=affinity,
+                            session_id=session_id,
+                            cohort=u.cohort,
+                            embedding_version=embedding_version,
+                            model_version=model_version,
+                        )
+                    )
+
+                played = rng.random() < play_p
+                if played:
+                    depth += 1.0
+                    u.fatigue = float(min(1.0, u.fatigue + cfg.fatigue_gain_per_play))
+                    events.append(
+                        Event(
+                            ts=now + timedelta(seconds=rank * 3),
+                            user_id=u.user_id,
+                            item_id=item_id,
+                            event_type="play",
+                            rank=rank,
+                            score=score,
+                            affinity=affinity,
+                            session_id=session_id,
+                            cohort=u.cohort,
+                            embedding_version=embedding_version,
+                            model_version=model_version,
+                        )
+                    )
+
+                    if rng.random() < complete_p:
+                        depth += 0.5
+                        events.append(
+                            Event(
+                                ts=now + timedelta(seconds=rank * 6),
+                                user_id=u.user_id,
+                                item_id=item_id,
+                                event_type="complete",
+                                rank=rank,
+                                score=score,
+                                affinity=affinity,
+                                session_id=session_id,
+                                cohort=u.cohort,
+                                embedding_version=embedding_version,
+                                model_version=model_version,
+                            )
+                        )
+                else:
+                    events.append(
+                        Event(
+                            ts=now + timedelta(seconds=rank * 3),
+                            user_id=u.user_id,
+                            item_id=item_id,
+                            event_type="skip",
+                            rank=rank,
+                            score=score,
+                            affinity=affinity,
+                            session_id=session_id,
+                            cohort=u.cohort,
+                            embedding_version=embedding_version,
+                            model_version=model_version,
+                        )
+                    )
+
+            days_since = max(0.0, (now - u.last_active).total_seconds() / 86400.0)
+            retention = (
+                u.base_return_prob
+                + cfg.retention_gain_per_depth * depth
+                - cfg.retention_decay_per_day * days_since
+            )
+            retention = float(np.clip(retention, 0.0, 1.0))
+
+            all_summaries.append(
+                SessionSummary(
+                    session_id=session_id,
+                    user_id=u.user_id,
+                    cohort=u.cohort,
+                    started_at=now,
+                    ended_at=now + timedelta(minutes=10),
+                    k=cfg.k,
+                    engagement_depth=float(depth),
+                    retention_proxy=retention,
+                    embedding_version=embedding_version,
+                    model_version=model_version,
+                )
+            )
+
+            all_events.extend(events)
+            u.last_active = now
+            u.fatigue = float(max(0.0, u.fatigue - cfg.fatigue_recovery_per_day * days_since))
 
     return all_events, all_summaries
