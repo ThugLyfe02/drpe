@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 EventType = Literal["impression", "click", "play", "complete", "skip", "save"]
 
 
 class Event(BaseModel):
+    # Pydantic reserves `model_` as a protected namespace; we intentionally use
+    # `model_version` to make experiment lineage explicit.
+    model_config = ConfigDict(protected_namespaces=())
+
     ts: datetime
     user_id: int
     item_id: int
@@ -23,6 +27,8 @@ class Event(BaseModel):
 
 
 class SessionSummary(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     session_id: str
     user_id: int
     cohort: str
