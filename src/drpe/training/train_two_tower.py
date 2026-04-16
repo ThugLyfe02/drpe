@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import argparse
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -15,7 +16,9 @@ from drpe.training.dataset import ImplicitConfig, ImplicitFeedbackDataset
 @dataclass
 class TrainConfig:
     # simulator (use default_factory to avoid mutable default)
-    sim: SimConfig = field(default_factory=lambda: SimConfig(num_users=300, num_items=1500, sessions_per_user=2, k=10))
+    sim: SimConfig = field(
+        default_factory=lambda: SimConfig(num_users=300, num_items=1500, sessions_per_user=2, k=10)
+    )
 
     # model
     dim: int = 64
@@ -78,6 +81,49 @@ def train(cfg: TrainConfig) -> str:
     return cfg.out_path
 
 
+def _parse_args() -> TrainConfig:
+    p = argparse.ArgumentParser(description="Train DRPE two-tower embeddings from simulator logs")
+
+    # output + core knobs
+    p.add_argument("--out", dest="out_path", default="artifacts/embeddings_v1.npz")
+    p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--dim", type=int, default=64)
+    p.add_argument("--epochs", type=int, default=2)
+    p.add_argument("--lr", type=float, default=1e-2)
+    p.add_argument("--batch", dest="batch_size", type=int, default=2048)
+    p.add_argument("--neg", dest="negatives_per_positive", type=int, default=4)
+
+    # simulator sizing (for quick local runs)
+    p.add_argument("--users", type=int, default=300)
+    p.add_argument("--items", type=int, default=1500)
+    p.add_argument("--sessions", type=int, default=2)
+    p.add_argument("--k", type=int, default=10)
+    p.add_argument("--embed-dim", dest="embedding_dim", type=int, default=32)
+
+    a = p.parse_args()
+
+    sim = SimConfig(
+        seed=a.seed,
+        embedding_dim=a.embedding_dim,
+        num_users=a.users,
+        num_items=a.items,
+        k=a.k,
+        sessions_per_user=a.sessions,
+    )
+
+    return TrainConfig(
+        sim=sim,
+        dim=a.dim,
+        lr=a.lr,
+        batch_size=a.batch_size,
+        epochs=a.epochs,
+        negatives_per_positive=a.negatives_per_positive,
+        seed=a.seed,
+        out_path=a.out_path,
+    )
+
+
 if __name__ == "__main__":
-    path = train(TrainConfig())
+    cfg = _parse_args()
+    path = train(cfg)
     print(f"saved embeddings: {path}")
