@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import torch
@@ -14,8 +14,8 @@ from drpe.training.dataset import ImplicitConfig, ImplicitFeedbackDataset
 
 @dataclass
 class TrainConfig:
-    # simulator
-    sim: SimConfig = SimConfig(num_users=300, num_items=1500, sessions_per_user=2, k=10)
+    # simulator (use default_factory to avoid mutable default)
+    sim: SimConfig = field(default_factory=lambda: SimConfig(num_users=300, num_items=1500, sessions_per_user=2, k=10))
 
     # model
     dim: int = 64
@@ -64,12 +64,12 @@ def train(cfg: TrainConfig) -> str:
             opt.step()
             total += float(loss.item())
             n += 1
-        # light logging
         print(f"epoch {epoch+1}/{cfg.epochs} loss={total/max(n,1):.4f} samples={len(ds)}")
 
     users_t, items_t = model.export_user_item_embeddings()
     users = users_t.numpy().astype(np.float32)
     items = items_t.numpy().astype(np.float32)
+
     # normalize rows for cosine stability
     users /= (np.linalg.norm(users, axis=1, keepdims=True) + 1e-8)
     items /= (np.linalg.norm(items, axis=1, keepdims=True) + 1e-8)
