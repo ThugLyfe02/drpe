@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from drpe.data.simulator import SimConfig
+from drpe.reporting.model_card import ranker_rollout_card
 from drpe.rollout.guardrails import GuardrailConfig
 from drpe.rollout.ranker_rollout import compare_rankers_for_rollout
 from drpe.models.ranker_io import load_ranker
@@ -22,8 +23,6 @@ def main() -> None:
 
     p.add_argument("--max-ret-drop", type=float, default=0.01)
 
-    # mode controls a realistic failure mode:
-    # risky = prioritize engagement and accept higher fatigue penalty on durability
     p.add_argument("--mode", choices=["safe", "risky"], default="safe")
     args = p.parse_args()
 
@@ -40,31 +39,36 @@ def main() -> None:
     cand = load_ranker(args.ranker_v2)
 
     if args.mode == "safe":
-        rep = compare_rankers_for_rollout(
-            embeddings_path=args.emb,
-            baseline_ranker=base,
-            candidate_ranker=cand,
-            cfg=cfg,
-            guardrails=GuardrailConfig(max_retention_drop=args.max_ret_drop),
-            gamma_retention=0.25,
-            retention_fatigue_penalty=0.00,
-        )
-        print("MODE=safe")
+        gamma = 0.25
+        pen = 0.00
     else:
-        rep = compare_rankers_for_rollout(
-            embeddings_path=args.emb,
-            baseline_ranker=base,
-            candidate_ranker=cand,
-            cfg=cfg,
-            guardrails=GuardrailConfig(max_retention_drop=args.max_ret_drop),
-            gamma_retention=0.05,  # de-emphasize retention in reranking
-            retention_fatigue_penalty=0.20,  # model a durability hit from fatigue
-        )
-        print("MODE=risky")
+        gamma = 0.05
+        pen = 0.20
 
-    print(f"Baseline: depth={rep.baseline.engagement_depth:.3f} ret={rep.baseline.retention_proxy:.3f}")
-    print(f"Candidate: depth={rep.candidate.engagement_depth:.3f} ret={rep.candidate.retention_proxy:.3f}")
-    print(f"Decision: {rep.decision.allow_rollout} - {rep.decision.reason}")
+    rep = compare_rankers_for_rollout(
+        embeddings_path=args.emb,
+        baseline_ranker=base,
+        candidate_ranker=cand,
+        cfg=cfg,
+        guardrails=GuardrailConfig(max_retention_drop=args.max_ret_drop),
+        gamma_retention=gamma,
+        retention_fatigue_penalty=pen,
+    )
+
+    card = ranker_rollout_card(
+        mode=args.mode,
+        baseline_depth=rep.baseline.engagement_depth,
+        baseline_ret=rep.baseline.retention_proxy,
+        candidate_depth=rep.candidate.engagement_depth,
+        candidate_ret=rep.candidate.retention_proxy,
+        decision_allow=rep.decision.allow_rollout,
+        decision_reason=rep.decision.reason,
+        max_ret_drop=args.max_ret_drop,
+        gamma_retention=gamma,
+        retention_fatigue_penalty_candidate=pen,
+    )
+
+    print(card.render())
 
 
 if __name__ == "__main__":
