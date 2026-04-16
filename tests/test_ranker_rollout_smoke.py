@@ -1,8 +1,6 @@
-import torch
-
 from drpe.data.simulator import SimConfig
 from drpe.models.ranker import MultiObjectiveRanker
-from drpe.rollout.guardsrails import GuardrailConfig
+from drpe.rollout.guardrails import GuardrailConfig
 from drpe.rollout.ranker_rollout import compare_rankers_for_rollout
 
 
@@ -22,9 +20,7 @@ def test_ranker_rollout_smoke(tmp_path):
         )
     )
 
-    # Baseline ranker: random init
     base_ranker = MultiObjectiveRanker(in_dim=8)
-    # Candidate ranker: same arch
     cand_ranker = MultiObjectiveRanker(in_dim=8)
 
     rep = compare_rankers_for_rollout(
