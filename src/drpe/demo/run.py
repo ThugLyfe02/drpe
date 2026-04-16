@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from drpe.data.simulator import SimConfig
+from drpe.reporting.model_card import embedding_rollout_card
 from drpe.rollout.guardrails import GuardrailConfig
 from drpe.rollout.rollout_from_artifacts import compare_embedding_artifacts
 from drpe.training.train_two_tower import train, TrainConfig
@@ -73,6 +74,12 @@ def main() -> None:
     )
 
     print("[3/3] rollout gate (durability + drift)...")
+    guardrails = GuardrailConfig(
+        max_retention_drop=args.max_ret_drop,
+        max_embedding_mean_cosine_shift=args.max_emb_drift,
+        max_embedding_mean_cosine_shift_per_cohort=args.max_emb_drift,
+    )
+
     report = compare_embedding_artifacts(
         baseline_path=v1_path,
         candidate_path=v2_path,
@@ -84,22 +91,26 @@ def main() -> None:
             sessions_per_user=args.sessions,
             k=args.k,
         ),
-        guardrails=GuardrailConfig(
-            max_retention_drop=args.max_ret_drop,
-            max_embedding_mean_cosine_shift=args.max_emb_drift,
-            max_embedding_mean_cosine_shift_per_cohort=args.max_emb_drift,
-        ),
+        guardrails=guardrails,
     )
 
-    print(f"Baseline: depth={report.baseline.engagement_depth:.3f} ret={report.baseline.retention_proxy:.3f}")
-    print(f"Candidate: depth={report.candidate.engagement_depth:.3f} ret={report.candidate.retention_proxy:.3f}")
-    print(f"KL(depth,ret)= {report.depth_kl:.4f} {report.retention_kl:.4f}")
-    print(f"EmbDrift mean users/items= {report.geom_users_mean:.4f} {report.geom_items_mean:.4f}")
-    if report.cohort_user_mean_shift:
-        print("Cohort user mean drift:")
-        for c, v in sorted(report.cohort_user_mean_shift.items()):
-            print(f"  {c}: {v:.4f}")
-    print(f"Decision: {report.decision.allow_rollout} - {report.decision.reason}")
+    card = embedding_rollout_card(
+        baseline_depth=report.baseline.engagement_depth,
+        baseline_ret=report.baseline.retention_proxy,
+        candidate_depth=report.candidate.engagement_depth,
+        candidate_ret=report.candidate.retention_proxy,
+        depth_kl=report.depth_kl,
+        ret_kl=report.retention_kl,
+        emb_users_mean=report.geom_users_mean,
+        emb_items_mean=report.geom_items_mean,
+        cohort_user_drift=report.cohort_user_mean_shift,
+        decision_allow=report.decision.allow_rollout,
+        decision_reason=report.decision.reason,
+        guardrail_max_ret_drop=guardrails.max_retention_drop,
+        guardrail_max_emb_mean=guardrails.max_embedding_mean_cosine_shift,
+    )
+
+    print(card.render())
 
 
 if __name__ == "__main__":
