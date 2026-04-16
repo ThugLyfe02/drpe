@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict
 
 import numpy as np
 import torch
 
-from drpe.data.simulator import SimConfig, run_simulation_with_embeddings, recommend_top_k_from_matrices
+from drpe.data.simulator import SimConfig, recommend_top_k_from_matrices
 from drpe.embeddings.io import load_embeddings
 from drpe.evaluation.metrics import cohort_retention_means, engagement_depth_mean, retention_proxy_mean
 from drpe.models.ranker import MultiObjectiveRanker, build_features
@@ -27,28 +27,6 @@ class RankerRolloutReport:
     decision: GuardrailDecision
 
 
-def _summarize(cfg: SimConfig, *, users: np.ndarray, items: np.ndarray, model_version: str) -> VariantStats:
-    rng = np.random.default_rng(cfg.seed)
-    items_quality = rng.uniform(0.3, 1.0, cfg.num_items).astype(np.float32)
-    items_pop = rng.beta(2, 8, cfg.num_items).astype(np.float32)
-
-    _, summaries = run_simulation_with_embeddings(
-        cfg,
-        users_embed=users,
-        items_vec=items,
-        items_quality=items_quality,
-        items_popularity=items_pop,
-        embedding_version="emb_v1",
-        model_version=model_version,
-    )
-
-    return VariantStats(
-        engagement_depth=engagement_depth_mean(summaries),
-        retention_proxy=retention_proxy_mean(summaries),
-        cohort_retention=cohort_retention_means(summaries),
-    )
-
-
 @torch.no_grad()
 def rerank_topk(
     *,
@@ -61,11 +39,10 @@ def rerank_topk(
 ) -> list[tuple[int, float, float]]:
     """Re-rank candidates using a learned ranker.
 
-    We compute a composite score:
+    Composite score:
       sigmoid(engagement_logit) + gamma * retention_pred
 
-    This is intentionally simple but production-realistic: it demonstrates
-    multi-objective ranking without over-building.
+    Keep it simple, explainable, and production-adjacent.
     """
     X = []
     for rank, (item_id, score, affinity) in enumerate(topk, start=1):
@@ -96,10 +73,14 @@ def compare_rankers_for_rollout(
     cfg: SimConfig,
     guardrails: GuardrailConfig = GuardrailConfig(),
     gamma_retention: float = 0.25,
+    retention_fatigue_penalty: float = 0.0,
 ) -> RankerRolloutReport:
     """Compare baseline vs candidate ranker on the same embeddings.
 
     This isolates ranking-layer changes while holding retrieval embeddings constant.
+
+    retention_fatigue_penalty lets us model a realistic failure mode:
+    aggressive engagement optimization can increase fatigue and reduce durability.
     """
 
     users, items = load_embeddings(embeddings_path)
@@ -118,23 +99,20 @@ def compare_rankers_for_rollout(
     items_quality = rng.uniform(0.3, 1.0, cfg.num_items).astype(np.float32)
     items_pop = rng.beta(2, 8, cfg.num_items).astype(np.float32)
 
-    # We run a lightweight session loop here to apply reranking before interaction simulation.
-    # We keep the simulator's interaction probabilities (affinity + fatigue) unchanged.
-    from drpe.data.simulator import generate_world, UserState
+    from drpe.data.simulator import generate_world, UserState, _sigmoid
+    from datetime import timedelta
+    from drpe.data.schemas import SessionSummary
 
     rng2 = np.random.default_rng(cfg.seed)
     users_state, _ = generate_world(cfg)
 
     def run_with_ranker(ranker: MultiObjectiveRanker, model_version: str) -> VariantStats:
-        # copy user states for fairness
         local_users = [UserState(**u.__dict__) for u in users_state]
-        all_summaries = []
+        all_summaries: list[SessionSummary] = []
 
         for u in local_users:
-            # override embedding with learned embedding
             u.embed = users[u.user_id].astype(np.float32)
             for s in range(cfg.sessions_per_user):
-                # retrieval top-k
                 topk = recommend_top_k_from_matrices(
                     user_id=u.user_id,
                     true_pref=u.true_pref,
@@ -144,7 +122,6 @@ def compare_rankers_for_rollout(
                     items_popularity=items_pop,
                     k=cfg.k,
                 )
-                # rerank
                 topk = rerank_topk(
                     ranker=ranker,
                     cohort=u.cohort,
@@ -154,13 +131,9 @@ def compare_rankers_for_rollout(
                     gamma_retention=gamma_retention,
                 )
 
-                # simulate a session using the same logic as simulator (inline minimal)
-                from datetime import timedelta
-                from drpe.data.simulator import _sigmoid
-                from drpe.data.schemas import SessionSummary
-
                 now = u.last_active + timedelta(hours=int(rng2.integers(6, 72)))
                 depth = 0.0
+
                 for rank, (item_id, score, affinity) in enumerate(topk, start=1):
                     play_p = _sigmoid(2.0 * affinity - 0.8 * u.fatigue)
                     complete_p = _sigmoid(1.6 * affinity - 0.6 * u.fatigue)
@@ -170,15 +143,13 @@ def compare_rankers_for_rollout(
                         u.fatigue = float(min(1.0, u.fatigue + cfg.fatigue_gain_per_play))
                         if rng2.random() < complete_p:
                             depth += 0.5
-                    else:
-                        # skip
-                        pass
 
                 days_since = max(0.0, (now - u.last_active).total_seconds() / 86400.0)
                 retention = (
                     u.base_return_prob
                     + cfg.retention_gain_per_depth * depth
                     - cfg.retention_decay_per_day * days_since
+                    - retention_fatigue_penalty * u.fatigue
                 )
                 retention = float(np.clip(retention, 0.0, 1.0))
 
