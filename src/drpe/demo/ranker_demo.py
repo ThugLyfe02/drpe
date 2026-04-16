@@ -38,12 +38,15 @@ def main() -> None:
     base = load_ranker(args.ranker_v1)
     cand = load_ranker(args.ranker_v2)
 
+    # Defaults are tuned for storytelling reliability:
+    # - safe mode is typically allowed under a 1% retention drop guardrail
+    # - risky mode is designed to trip the guardrail via fatigue-driven durability loss
     if args.mode == "safe":
         gamma = 0.25
         pen = 0.00
     else:
-        gamma = 0.05
-        pen = 0.20
+        gamma = 0.02
+        pen = 0.65
 
     rep = compare_rankers_for_rollout(
         embeddings_path=args.emb,
