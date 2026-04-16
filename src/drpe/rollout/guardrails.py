@@ -19,6 +19,10 @@ class GuardrailConfig:
     # This treats embedding updates like schema migrations: measurable drift gates rollout.
     max_embedding_mean_cosine_shift: Optional[float] = None
 
+    # Optional: maximum allowed mean cosine shift per cohort (users).
+    # If provided, we block rollout if any cohort exceeds this threshold.
+    max_embedding_mean_cosine_shift_per_cohort: Optional[float] = None
+
 
 def decide_rollout(
     *,
@@ -28,17 +32,18 @@ def decide_rollout(
     cohort_retention_candidate: Dict[str, float] | None = None,
     embedding_mean_cosine_shift_users: Optional[float] = None,
     embedding_mean_cosine_shift_items: Optional[float] = None,
+    cohort_user_mean_shift: Dict[str, float] | None = None,
     cfg: GuardrailConfig = GuardrailConfig(),
 ) -> GuardrailDecision:
     """Block rollout if durability guardrails are breached.
 
-    Durability is prioritized over short-term lift.
-
     Guardrails:
     - retention proxy relative drop
-    - worst-cohort retention proxy relative drop (optional)
-    - embedding geometry drift (optional): mean cosine shift for users/items
+    - worst-cohort retention proxy relative drop
+    - embedding geometry drift (mean cosine shift for users/items)
+    - embedding cohort drift (any cohort user mean shift exceeds threshold)
     """
+
     if baseline_retention <= 0:
         return GuardrailDecision(False, "invalid baseline retention")
 
@@ -68,7 +73,6 @@ def decide_rollout(
             )
 
     if cfg.max_embedding_mean_cosine_shift is not None:
-        # Only gate if drift numbers are provided
         if embedding_mean_cosine_shift_users is not None and embedding_mean_cosine_shift_users > cfg.max_embedding_mean_cosine_shift:
             return GuardrailDecision(
                 False,
@@ -79,5 +83,14 @@ def decide_rollout(
                 False,
                 f"blocked: item embedding drift mean {embedding_mean_cosine_shift_items:.4f} exceeds {cfg.max_embedding_mean_cosine_shift:.4f}",
             )
+
+    if cfg.max_embedding_mean_cosine_shift_per_cohort is not None and cohort_user_mean_shift:
+        # Gate if any cohort exceeds threshold
+        for c, v in cohort_user_mean_shift.items():
+            if v > cfg.max_embedding_mean_cosine_shift_per_cohort:
+                return GuardrailDecision(
+                    False,
+                    f"blocked: cohort {c} user embedding drift mean {v:.4f} exceeds {cfg.max_embedding_mean_cosine_shift_per_cohort:.4f}",
+                )
 
     return GuardrailDecision(True, "allowed: guardrails satisfied")
