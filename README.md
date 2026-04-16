@@ -16,9 +16,14 @@ cd $env:USERPROFILE\projects
 # git clone https://github.com/ThugLyfe02/drpe.git
 cd drpe
 
-python -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+
+# install the package (src layout)
+pip install -e .
+
 pytest -q
 ```
 
