@@ -9,7 +9,7 @@ from drpe.models.ranker_io import load_ranker
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="DRPE ranker rollout demo (v1 vs v2 ranker gated by durability)")
+    p = argparse.ArgumentParser(description="DRPE ranker rollout demo (safe vs risky candidate gated by durability)")
     p.add_argument("--emb", default="artifacts/embeddings_for_ranker.npz")
     p.add_argument("--ranker-v1", default="artifacts/ranker_v1.pt")
     p.add_argument("--ranker-v2", default="artifacts/ranker_v2.pt")
@@ -21,6 +21,10 @@ def main() -> None:
     p.add_argument("--embed-dim", dest="embedding_dim", type=int, default=32)
 
     p.add_argument("--max-ret-drop", type=float, default=0.01)
+
+    # mode controls a realistic failure mode:
+    # risky = prioritize engagement and accept higher fatigue penalty on durability
+    p.add_argument("--mode", choices=["safe", "risky"], default="safe")
     args = p.parse_args()
 
     cfg = SimConfig(
@@ -35,13 +39,28 @@ def main() -> None:
     base = load_ranker(args.ranker_v1)
     cand = load_ranker(args.ranker_v2)
 
-    rep = compare_rankers_for_rollout(
-        embeddings_path=args.emb,
-        baseline_ranker=base,
-        candidate_ranker=cand,
-        cfg=cfg,
-        guardrails=GuardrailConfig(max_retention_drop=args.max_ret_drop),
-    )
+    if args.mode == "safe":
+        rep = compare_rankers_for_rollout(
+            embeddings_path=args.emb,
+            baseline_ranker=base,
+            candidate_ranker=cand,
+            cfg=cfg,
+            guardrails=GuardrailConfig(max_retention_drop=args.max_ret_drop),
+            gamma_retention=0.25,
+            retention_fatigue_penalty=0.00,
+        )
+        print("MODE=safe")
+    else:
+        rep = compare_rankers_for_rollout(
+            embeddings_path=args.emb,
+            baseline_ranker=base,
+            candidate_ranker=cand,
+            cfg=cfg,
+            guardrails=GuardrailConfig(max_retention_drop=args.max_ret_drop),
+            gamma_retention=0.05,  # de-emphasize retention in reranking
+            retention_fatigue_penalty=0.20,  # model a durability hit from fatigue
+        )
+        print("MODE=risky")
 
     print(f"Baseline: depth={rep.baseline.engagement_depth:.3f} ret={rep.baseline.retention_proxy:.3f}")
     print(f"Candidate: depth={rep.candidate.engagement_depth:.3f} ret={rep.candidate.retention_proxy:.3f}")
