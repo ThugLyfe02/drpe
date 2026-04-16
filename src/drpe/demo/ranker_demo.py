@@ -38,15 +38,14 @@ def main() -> None:
     base = load_ranker(args.ranker_v1)
     cand = load_ranker(args.ranker_v2)
 
-    # Defaults are tuned for storytelling reliability:
-    # - safe mode is typically allowed under a 1% retention drop guardrail
-    # - risky mode is designed to trip the guardrail via fatigue-driven durability loss
     if args.mode == "safe":
         gamma = 0.25
         pen = 0.00
+        bias = 0.0
     else:
         gamma = 0.02
         pen = 0.65
+        bias = 0.02  # deterministic durability hit for a guaranteed block example
 
     rep = compare_rankers_for_rollout(
         embeddings_path=args.emb,
@@ -56,6 +55,7 @@ def main() -> None:
         guardrails=GuardrailConfig(max_retention_drop=args.max_ret_drop),
         gamma_retention=gamma,
         retention_fatigue_penalty=pen,
+        candidate_retention_bias=bias,
     )
 
     card = ranker_rollout_card(
