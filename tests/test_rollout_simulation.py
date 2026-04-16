@@ -9,7 +9,6 @@ def test_rollout_blocks_when_candidate_retention_worse():
     decision_cfg = GuardrailConfig(max_retention_drop=0.01)
 
     comp = compare_for_rollout(baseline_cfg=base, candidate_cfg=cand, guardrails=decision_cfg)
-    # Candidate is designed to have worse durability
     assert comp.decision.allow_rollout is False
 
 
