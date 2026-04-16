@@ -9,6 +9,7 @@ from drpe.data.simulator import SimConfig, run_simulation_with_embeddings
 from drpe.drift.embedding_geometry import build_geometry_drift_report
 from drpe.drift.drift import histogram_kl
 from drpe.embeddings.io import load_embeddings
+from drpe.embeddings.versioning import generate_embedding_versions
 from drpe.evaluation.metrics import cohort_retention_means, engagement_depth_mean, retention_proxy_mean
 from drpe.rollout.guardrails import GuardrailConfig, GuardrailDecision, decide_rollout
 
@@ -28,6 +29,7 @@ class ArtifactRolloutReport:
     retention_kl: float
     geom_users_mean: float
     geom_items_mean: float
+    cohort_user_mean_shift: Dict[str, float]
     decision: GuardrailDecision
 
 
@@ -68,10 +70,6 @@ def _summarize(
 
 
 def _align_cfg_to_embeddings(cfg: SimConfig, users: np.ndarray, items: np.ndarray) -> SimConfig:
-    """Ensure cfg dimensions match the embedding artifacts.
-
-    This prevents common mistakes where training uses dim!=sim.embedding_dim.
-    """
     if users.ndim != 2 or items.ndim != 2:
         raise ValueError("embeddings must be 2D matrices")
     if users.shape[1] != items.shape[1]:
@@ -97,7 +95,6 @@ def compare_embedding_artifacts(
     base_users, base_items = load_embeddings(baseline_path)
     cand_users, cand_items = load_embeddings(candidate_path)
 
-    # Align config to embedding shapes so simulation uses correct dimensionality.
     cfg_base = _align_cfg_to_embeddings(cfg, base_users, base_items)
     cfg_cand = _align_cfg_to_embeddings(cfg, cand_users, cand_items)
 
@@ -119,13 +116,21 @@ def compare_embedding_artifacts(
     depth_kl = histogram_kl(base_ed, cand_ed, bins=40)
     ret_kl = histogram_kl(base_rp, cand_rp, bins=40)
 
-    # geometry drift uses aligned embeddings
+    # Cohort breakdown for geometry drift (stable assignment by seed)
+    cohorts = generate_embedding_versions(
+        seed=cfg_base.seed,
+        embedding_dim=cfg_base.embedding_dim,
+        num_users=cfg_base.num_users,
+        num_items=cfg_base.num_items,
+        drift_strength=0.0,
+    ).user_cohorts
+
     geom = build_geometry_drift_report(
         users_v1=base_users,
         users_v2=cand_users,
         items_v1=base_items,
         items_v2=cand_items,
-        user_cohorts={i: "all" for i in range(cfg_base.num_users)},
+        user_cohorts=cohorts,
     )
 
     decision = decide_rollout(
@@ -135,6 +140,7 @@ def compare_embedding_artifacts(
         cohort_retention_candidate=cand_stats.cohort_retention,
         embedding_mean_cosine_shift_users=geom.users.mean_cosine_shift,
         embedding_mean_cosine_shift_items=geom.items.mean_cosine_shift,
+        cohort_user_mean_shift=geom.cohort_user_mean_shift,
         cfg=guardrails,
     )
 
@@ -145,5 +151,6 @@ def compare_embedding_artifacts(
         retention_kl=ret_kl,
         geom_users_mean=geom.users.mean_cosine_shift,
         geom_items_mean=geom.items.mean_cosine_shift,
+        cohort_user_mean_shift=geom.cohort_user_mean_shift,
         decision=decision,
     )
