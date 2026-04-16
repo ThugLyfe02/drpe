@@ -9,13 +9,14 @@ from torch.utils.data import DataLoader, Dataset
 
 from drpe.data.simulator import SimConfig, run_simulation
 from drpe.models.ranker import MultiObjectiveRanker, build_features
+from drpe.models.ranker_io import RankerArtifact, save_ranker
 
 
 class RankerDataset(Dataset):
     """Supervised dataset from simulator events.
 
-    We treat play/complete as engagement label.
-    Retention label is session-level retention_proxy attached to each impression.
+    Engagement label: play/complete
+    Retention label: session-level retention_proxy attached to each impression.
     """
 
     def __init__(self, cfg: SimConfig, seed: int = 7):
@@ -24,15 +25,12 @@ class RankerDataset(Dataset):
 
         events, summaries = run_simulation(cfg, embedding_version="emb_sim", model_version="rank_sim")
 
-        # map session_id -> retention_proxy
         ret_by_session = {s.session_id: s.retention_proxy for s in summaries}
 
-        # We need item_quality/popularity; simulator items are internal, so approximate
-        # using stable RNG (consistent across runs for same seed).
+        # Approximate item properties with stable RNG (consistent per seed)
         item_quality = rng.uniform(0.3, 1.0, cfg.num_items).astype(np.float32)
         item_pop = rng.beta(2, 8, cfg.num_items).astype(np.float32)
 
-        # engagement label per (user,item,session,rank)
         engaged = set(
             (e.session_id, e.user_id, e.item_id)
             for e in events
@@ -113,6 +111,7 @@ def train_ranker(cfg: RankerTrainCfg) -> MultiObjectiveRanker:
             n += 1
         print(f"epoch {ep+1}/{cfg.epochs} loss={total/max(n,1):.4f} samples={len(ds)}")
 
+    model.eval()
     return model
 
 
@@ -123,9 +122,16 @@ def main() -> None:
     p.add_argument("--sessions", type=int, default=2)
     p.add_argument("--k", type=int, default=10)
     p.add_argument("--embed-dim", dest="embedding_dim", type=int, default=32)
+
     p.add_argument("--epochs", type=int, default=2)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--beta-ret", type=float, default=0.35)
+    p.add_argument("--hidden", type=int, default=64)
+    p.add_argument("--dropout", type=float, default=0.10)
+
+    # artifact
+    p.add_argument("--out", default="artifacts/ranker_v1.pt")
+
     a = p.parse_args()
 
     sim = SimConfig(
@@ -137,7 +143,19 @@ def main() -> None:
         k=a.k,
     )
 
-    train_ranker(RankerTrainCfg(sim=sim, epochs=a.epochs, lr=a.lr, beta_ret=a.beta_ret))
+    model = train_ranker(
+        RankerTrainCfg(
+            sim=sim,
+            epochs=a.epochs,
+            lr=a.lr,
+            beta_ret=a.beta_ret,
+            hidden=a.hidden,
+            dropout=a.dropout,
+        )
+    )
+
+    save_ranker(a.out, model, RankerArtifact(in_dim=8, hidden=a.hidden, dropout=a.dropout))
+    print(f"saved ranker: {a.out}")
 
 
 if __name__ == "__main__":
