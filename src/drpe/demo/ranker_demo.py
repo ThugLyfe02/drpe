@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from drpe.data.simulator import SimConfig
+from drpe.reporting.export import CardHeader, render_with_header, write_card
 from drpe.reporting.model_card import ranker_rollout_card
 from drpe.rollout.guardrails import GuardrailConfig
 from drpe.rollout.ranker_rollout import compare_rankers_for_rollout
@@ -14,16 +15,14 @@ def main() -> None:
     p.add_argument("--emb", default="artifacts/embeddings_for_ranker.npz")
     p.add_argument("--ranker-v1", default="artifacts/ranker_v1.pt")
     p.add_argument("--ranker-v2", default="artifacts/ranker_v2.pt")
-
     p.add_argument("--users", type=int, default=200)
     p.add_argument("--items", type=int, default=800)
     p.add_argument("--sessions", type=int, default=2)
     p.add_argument("--k", type=int, default=10)
     p.add_argument("--embed-dim", dest="embedding_dim", type=int, default=32)
-
     p.add_argument("--max-ret-drop", type=float, default=0.01)
-
     p.add_argument("--mode", choices=["safe", "risky"], default="safe")
+    p.add_argument("--export", action="store_true", help="write model card to artifacts/model_cards")
     args = p.parse_args()
 
     cfg = SimConfig(
@@ -43,9 +42,10 @@ def main() -> None:
         pen = 0.00
         bias = 0.0
     else:
+        # deterministic “block” example
         gamma = 0.02
         pen = 0.65
-        bias = 0.02  # deterministic durability hit for a guaranteed block example
+        bias = 0.02
 
     rep = compare_rankers_for_rollout(
         embeddings_path=args.emb,
@@ -72,6 +72,18 @@ def main() -> None:
     )
 
     print(card.render())
+
+    if args.export:
+        header = CardHeader(
+            kind="ranker_rollout",
+            version_left="ranker_v1",
+            version_right=f"ranker_v2({args.mode})",
+            thresholds={"max_retention_drop": f"{args.max_ret_drop:.4f}"},
+            notes=f"gamma_retention={gamma:.3f}, fatigue_penalty={pen:.3f}, candidate_bias={bias:.3f}",
+        )
+        content = render_with_header(card, header)
+        out = write_card(f"artifacts/model_cards/ranker_{args.mode}.txt", content)
+        print(f"\n[exported] {out}")
 
 
 if __name__ == "__main__":

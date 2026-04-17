@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from drpe.data.simulator import SimConfig
+from drpe.reporting.export import CardHeader, render_with_header, write_card
 from drpe.reporting.model_card import embedding_rollout_card
 from drpe.rollout.guardrails import GuardrailConfig
 from drpe.rollout.rollout_from_artifacts import compare_embedding_artifacts
@@ -25,6 +26,7 @@ def main() -> None:
     p.add_argument("--seed-v2", type=int, default=8)
     p.add_argument("--max-ret-drop", type=float, default=0.01)
     p.add_argument("--max-emb-drift", type=float, default=0.12)
+    p.add_argument("--export", action="store_true", help="write model card to artifacts/model_cards")
     args = p.parse_args()
 
     sim_v1 = SimConfig(
@@ -111,6 +113,29 @@ def main() -> None:
     )
 
     print(card.render())
+
+    if args.export:
+        header = CardHeader(
+            kind="embedding_rollout",
+            version_left="emb_v1",
+            version_right="emb_v2",
+            thresholds={
+                "max_retention_drop": f"{guardrails.max_retention_drop:.4f}",
+                "max_embedding_mean_cosine_shift": (
+                    f"{guardrails.max_embedding_mean_cosine_shift:.4f}"
+                    if guardrails.max_embedding_mean_cosine_shift is not None
+                    else "(none)"
+                ),
+                "max_embedding_mean_cosine_shift_per_cohort": (
+                    f"{guardrails.max_embedding_mean_cosine_shift_per_cohort:.4f}"
+                    if guardrails.max_embedding_mean_cosine_shift_per_cohort is not None
+                    else "(none)"
+                ),
+            },
+        )
+        content = render_with_header(card, header)
+        out = write_card("artifacts/model_cards/embedding_rollout.txt", content)
+        print(f"\n[exported] {out}")
 
 
 if __name__ == "__main__":
