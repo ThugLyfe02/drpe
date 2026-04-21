@@ -39,6 +39,13 @@ def main() -> None:
     # Ops wiring
     p.add_argument("--emit-ops", action="store_true", help="emit ops artifacts (incidents/traces/ops notes)")
 
+    # Demo control
+    p.add_argument(
+        "--force-block",
+        action="store_true",
+        help="force a blocked rollout for demo storytelling (emits incident + trace when --emit-ops is set)",
+    )
+
     args = p.parse_args()
 
     sim_v1 = SimConfig(
@@ -107,6 +114,12 @@ def main() -> None:
         ),
         guardrails=guardrails,
     )
+
+    # Force-block is strictly for demo storytelling: we keep the measured metrics but
+    # override the decision so RecSysOps artifacts are emitted deterministically.
+    if args.force_block:
+        report.decision.allow_rollout = False
+        report.decision.reason = "demo: forced block to emit incident + trace artifacts"
 
     card = embedding_rollout_card(
         baseline_depth=report.baseline.engagement_depth,
