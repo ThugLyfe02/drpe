@@ -34,3 +34,15 @@ pytest -q
 - **Rollout**: stage → observe → expand (rollback on guardrail breach)
 
 See `docs/architecture.md` for the system spec.
+
+## How to reproduce (5 minutes, Windows/PowerShell)
+
+**Goal:** run end-to-end “RecSysOps” demos that *gate* model changes (embeddings + ranker) with durability guardrails, emit model cards, and (when blocked) automatically produce incident + trace artifacts.
+
+### 1) Setup
+```powershell
+# from repo root
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+pytest -q
