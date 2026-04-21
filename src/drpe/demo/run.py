@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import numpy as np
 
 from drpe.data.simulator import SimConfig
 from drpe.reporting.export import CardHeader, render_with_header, write_card
@@ -8,6 +9,13 @@ from drpe.reporting.model_card import embedding_rollout_card
 from drpe.rollout.guardrails import GuardrailConfig
 from drpe.rollout.rollout_from_artifacts import compare_embedding_artifacts
 from drpe.training.train_two_tower import train, TrainConfig
+
+# RecSysOps
+from drpe.recsysops.cold_start import ColdStartSignals
+from drpe.recsysops.integration import ExportPaths, build_blocked_incident, export_incident, export_ops_note
+from drpe.recsysops.ramp_integration import assess
+from drpe.recsysops.trace_integration import maybe_emit_trace
+from drpe.recsysops.trace_sampler import TraceSampleConfig
 
 
 def main() -> None:
@@ -27,6 +35,10 @@ def main() -> None:
     p.add_argument("--max-ret-drop", type=float, default=0.01)
     p.add_argument("--max-emb-drift", type=float, default=0.12)
     p.add_argument("--export", action="store_true", help="write model card to artifacts/model_cards")
+
+    # Ops wiring
+    p.add_argument("--emit-ops", action="store_true", help="emit ops artifacts (incidents/traces/ops notes)")
+
     args = p.parse_args()
 
     sim_v1 = SimConfig(
@@ -136,6 +148,64 @@ def main() -> None:
         content = render_with_header(card, header)
         out = write_card("artifacts/model_cards/embedding_rollout.txt", content)
         print(f"\n[exported] {out}")
+
+    # RecSysOps wiring (only when explicitly requested)
+    if args.emit_ops:
+        # Cold-start ramp note (demo signals)
+        sig = ColdStartSignals(
+            prior_quality=0.35,
+            metadata_confidence=0.50,
+            early_ctr=0.03,
+            early_completion=0.20,
+        )
+        cs = assess(sig)
+        if cs.risk >= 0.45:
+            out = export_ops_note(
+                "cold_start_ramp",
+                {
+                    "risk": cs.risk,
+                    "rationale": cs.rationale,
+                    "ramp": {
+                        "stage": cs.stage,
+                        "traffic_pct": cs.traffic_pct,
+                        "stop_conditions": cs.stop_conditions,
+                    },
+                },
+                paths=ExportPaths(),
+            )
+            print(f"[recsysops] exported cold-start ramp note: {out}")
+
+        # If blocked, emit incident + a forced trace signature
+        if not report.decision.allow_rollout:
+            # Synthetic top-k score trace (privacy-safe)
+            item_ids = np.arange(100, dtype=np.int64)
+            scores = np.linspace(1.0, 0.0, 100, dtype=np.float32)
+
+            trace_id = maybe_emit_trace(
+                user_id=0,
+                session_id="demo",
+                model_version="emb_v2",
+                cohort="core",
+                feature_version="embedding_features_v1",
+                item_ids=item_ids,
+                scores=scores,
+                cfg=TraceSampleConfig(sample_rate=1.0),
+            )
+
+            inc = build_blocked_incident(
+                title="Embedding rollout blocked by durability/drift guardrails",
+                summary=report.decision.reason,
+                metric_name="retention_proxy",
+                baseline=report.baseline.retention_proxy,
+                current=report.candidate.retention_proxy,
+                threshold=report.baseline.retention_proxy * (1.0 - guardrails.max_retention_drop),
+                affected_surfaces=["home_feed"],
+                affected_cohorts=["new", "core", "power"],
+                trace_id=trace_id,
+                suspected_causes=["embedding geometry drift", "distribution drift"],
+            )
+            out = export_incident(inc, paths=ExportPaths())
+            print(f"[recsysops] exported incident: {out}")
 
 
 if __name__ == "__main__":
