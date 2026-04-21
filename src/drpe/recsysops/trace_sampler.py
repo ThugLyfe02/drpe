@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -70,8 +71,13 @@ def build_rank_trace(
 
 
 def export_trace_jsonl(path: str, traces: List[Dict[str, Any]]) -> None:
-    """Write traces to JSONL for inspection."""
-    with open(path, "w", encoding="utf-8") as f:
+    """Write traces to JSONL for inspection.
+
+    Ensures parent directory exists.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
         for t in traces:
             f.write(json.dumps(t, ensure_ascii=False) + "\n")
 
