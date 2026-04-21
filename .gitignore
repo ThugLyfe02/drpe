@@ -1,0 +1,22 @@
+@"
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.pytest_cache/
+
+# Virtual env
+.venv/
+
+# Local artifacts
+artifacts/
+local_changes_patch.txt
+"@ | Out-File -Encoding utf8 .gitignore
+
+@"
+src/drpe.egg-info/
+local_changes_patch.txt
+"@ | Add-Content .gitignore
