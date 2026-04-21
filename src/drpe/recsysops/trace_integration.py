@@ -1,4 +1,3 @@
-@"
 from __future__ import annotations
 
 from typing import Optional
@@ -14,6 +13,7 @@ from drpe.recsysops.trace_sampler import (
     summarize_topk,
 )
 
+
 def maybe_emit_trace(
     *,
     user_id: int,
@@ -26,7 +26,12 @@ def maybe_emit_trace(
     out_path: str = "artifacts/traces/rank_traces.jsonl",
     cfg: TraceSampleConfig = TraceSampleConfig(),
 ) -> Optional[str]:
-    """Emit a privacy-safe sampled rank trace and return its trace_id."""
+    """Emit a privacy-safe sampled rank trace and return its trace_id.
+
+    Deterministic sampling ensures reproducible sampling decisions and avoids storing
+    raw user features.
+    """
+
     trace_id = make_trace_id(user_id=user_id, session_id=session_id, model_version=model_version)
 
     if not should_sample(trace_id, cfg):
@@ -41,6 +46,6 @@ def maybe_emit_trace(
         topk=topk,
         notes="auto-emitted by DRPE demo",
     )
+
     export_trace_jsonl(out_path, [trace])
     return trace_id
-"@ | Out-File -Encoding utf8 .\src\drpe\recsysops\trace_integration.py
