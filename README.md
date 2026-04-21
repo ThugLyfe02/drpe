@@ -2,6 +2,8 @@
 
 A systems‑first recommendation project focused on **durability**: embedding lifecycle, drift detection, guardrails, and staged rollouts.
 
+DRPE is a durability‑first personalization sandbox: it simulates end‑to‑end recsys behavior, trains retrieval/ranking components, and gates every change with drift + cohort guardrails. The point isn’t a single offline metric spike — it’s proving you can ship safely when embeddings drift, cohorts diverge, or cold‑start launches go sideways. Each demo run outputs a model card, and blocked rollouts automatically emit an incident record plus a privacy‑safe trace signature.
+
 Most portfolio recommenders stop at “train a model + report NDCG.” DRPE treats recommendation as a **production feedback system** that can silently degrade when proxies, drift, or cohort variance are ignored.
 
 ## What’s in this repo (v0)
