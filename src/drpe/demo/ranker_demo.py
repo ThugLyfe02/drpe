@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import numpy as np
 
 from drpe.data.simulator import SimConfig
+from drpe.models.ranker_io import load_ranker
 from drpe.reporting.export import CardHeader, render_with_header, write_card
 from drpe.reporting.model_card import ranker_rollout_card
 from drpe.rollout.guardrails import GuardrailConfig
 from drpe.rollout.ranker_rollout import compare_rankers_for_rollout
-from drpe.models.ranker_io import load_ranker
+
+# RecSysOps
+from drpe.recsysops.cold_start import ColdStartSignals
+from drpe.recsysops.integration import ExportPaths, build_blocked_incident, export_incident, export_ops_note
+from drpe.recsysops.ramp_integration import assess
+from drpe.recsysops.trace_integration import maybe_emit_trace
 
 
 def main() -> None:
@@ -15,14 +22,20 @@ def main() -> None:
     p.add_argument("--emb", default="artifacts/embeddings_for_ranker.npz")
     p.add_argument("--ranker-v1", default="artifacts/ranker_v1.pt")
     p.add_argument("--ranker-v2", default="artifacts/ranker_v2.pt")
+
     p.add_argument("--users", type=int, default=200)
     p.add_argument("--items", type=int, default=800)
     p.add_argument("--sessions", type=int, default=2)
     p.add_argument("--k", type=int, default=10)
     p.add_argument("--embed-dim", dest="embedding_dim", type=int, default=32)
+
     p.add_argument("--max-ret-drop", type=float, default=0.01)
     p.add_argument("--mode", choices=["safe", "risky"], default="safe")
     p.add_argument("--export", action="store_true", help="write model card to artifacts/model_cards")
+
+    # Ops knobs
+    p.add_argument("--emit-ops", action="store_true", help="emit ops artifacts (incidents/traces/ops notes)")
+
     args = p.parse_args()
 
     cfg = SimConfig(
@@ -73,6 +86,7 @@ def main() -> None:
 
     print(card.render())
 
+    # Export model card
     if args.export:
         header = CardHeader(
             kind="ranker_rollout",
@@ -84,6 +98,65 @@ def main() -> None:
         content = render_with_header(card, header)
         out = write_card(f"artifacts/model_cards/ranker_{args.mode}.txt", content)
         print(f"\n[exported] {out}")
+
+    # RecSysOps: cold-start ramp note (only when asked)
+    if args.emit_ops:
+        sig = ColdStartSignals(
+            prior_quality=0.35,
+            metadata_confidence=0.50,
+            early_ctr=0.03,
+            early_completion=0.20,
+        )
+        cs = assess(sig)
+        if cs.risk >= 0.45:
+            out = export_ops_note(
+                "cold_start_ramp",
+                {
+                    "risk": cs.risk,
+                    "rationale": cs.rationale,
+                    "ramp": {
+                        "stage": cs.stage,
+                        "traffic_pct": cs.traffic_pct,
+                        "stop_conditions": cs.stop_conditions,
+                    },
+                },
+                paths=ExportPaths(),
+            )
+            print(f"[recsysops] exported cold-start ramp note: {out}")
+
+        # RecSysOps: incident + trace when blocked
+        if not rep.decision.allow_rollout:
+            # minimal privacy-safe trace sample
+            item_ids = np.arange(100, dtype=np.int64)
+            scores = np.linspace(1.0, 0.0, 100, dtype=np.float32)
+
+            trace_id = maybe_emit_trace(
+                user_id=0,
+                session_id="demo",
+                model_version=f"ranker_v2({args.mode})",
+                cohort="core",
+                feature_version="ranker_features_v1",
+                item_ids=item_ids,
+                scores=scores,
+            )
+
+            inc = build_blocked_incident(
+                title="Ranker rollout blocked by durability guardrail",
+                summary=rep.decision.reason,
+                baseline=rep.baseline.retention_proxy,
+                current=rep.candidate.retention_proxy,
+                threshold=rep.baseline.retention_proxy * (1.0 - args.max_ret_drop),
+                affected_surfaces=["home_feed"],
+                affected_cohorts=["new", "core", "power"],
+                trace_id=trace_id,
+                suspected_causes=[
+                    "ranking tradeoff shifted toward engagement",
+                    "fatigue proxy increased",
+                    "candidate durability bias applied (demo)",
+                ],
+            )
+            out = export_incident(inc, paths=ExportPaths())
+            print(f"[recsysops] exported incident: {out}")
 
 
 if __name__ == "__main__":
